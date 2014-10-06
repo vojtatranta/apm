@@ -71,8 +71,6 @@ class Install extends Command
           callback("#{stdout}\n#{stderr}")
 
   updateWindowsEnv: (env) ->
-    env.USERPROFILE = env.HOME
-
     # Make sure node-gyp is always on the PATH
     localModuleBins = path.resolve(__dirname, '..', 'node_modules', '.bin')
     if env.Path
