@@ -66,6 +66,10 @@ describe "apm init", ->
           body: 'attach($1) *outlet'
           prefix: 'att'
         }
+        expect(CSON.readFileSync(path.join(packagePath, 'scoped-properties', 'fake-package.cson'))['.source.r']['editor']).toEqual {
+          foldEndPattern: '(^\\s*\\)|^\\s*\\})'
+          commentStart: '# '
+        }
 
       it "unescapes escaped dollar signs `$` in snippets", ->
         forLoopBody = CSON.readFileSync(path.join(packagePath, 'snippets', 'fake-package.cson'))['.source.perl']['For Loop'].body
@@ -112,7 +116,7 @@ describe "apm init", ->
             @syntax-gutter-text-color: #080808;
             @syntax-gutter-text-color-selected: #080808;
             @syntax-gutter-background-color: #F5F5F5;
-            @syntax-gutter-background-color-selected: rgba(92, 108, 125, 0.07);
+            @syntax-gutter-background-color-selected: rgba(0, 108, 125, 0.07);
           """
           expect(fs.readFileSync(path.join(themePath, 'stylesheets', 'base.less'), 'utf8')).toContain """
             @import "syntax-variables";

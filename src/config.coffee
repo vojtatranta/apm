@@ -45,7 +45,7 @@ module.exports =
     process.env.ATOM_API_URL ? 'https://atom.io/api'
 
   getNodeVersion: ->
-    process.env.ATOM_NODE_VERSION ? '0.11.13'
+    process.env.ATOM_NODE_VERSION ? '0.17.0'
 
   getNodeArch: ->
     switch process.platform
@@ -83,8 +83,11 @@ module.exports =
     vs2010Path = path.join(@x86ProgramFilesDirectory(), "Microsoft Visual Studio 10.0", "Common7", "IDE")
     return '2010' if fs.existsSync(vs2010Path)
 
-  getSetting: (key, callback) ->
+  loadNpm: (callback) ->
     npmOptions =
       userconfig: @getUserConfigPath()
       globalconfig: @getGlobalConfigPath()
-    npm.load npmOptions, -> callback(npm.config.get(key))
+    npm.load npmOptions, -> callback(null, npm)
+
+  getSetting: (key, callback) ->
+    @loadNpm -> callback(npm.config.get(key))
