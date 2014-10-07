@@ -54,7 +54,6 @@ class Install extends Command
     installNodeArgs.push("--arch=#{config.getNodeArch()}")
 
     env = _.extend({}, process.env, HOME: @atomNodeDirectory)
-    env.USERPROFILE = env.HOME if config.isWin32()
 
     fs.makeTreeSync(@atomDirectory)
 
