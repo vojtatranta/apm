@@ -1,10 +1,12 @@
 path = require 'path'
+url = require 'url'
 
 optimist = require 'optimist'
 Git = require 'git-utils'
+semver = require 'npm/node_modules/semver'
 
 fs = require './fs'
-config = require './config'
+config = require './apm'
 Command = require './command'
 Login = require './login'
 Packages = require './packages'
@@ -43,8 +45,6 @@ class Publish extends Command
     options.alias('h', 'help').describe('help', 'Print this usage message')
     options.alias('t', 'tag').string('tag').describe('tag', 'Specify a tag to publish')
     options.alias('r', 'rename').string('rename').describe('rename', 'Specify a new name for the package')
-
-  showHelp: (argv) -> @parseOptions(argv).showHelp()
 
   # Create a new version and tag use the `npm version` command.
   #
@@ -89,8 +89,6 @@ class Publish extends Command
     requestSettings =
       url: "https://api.github.com/repos/#{Packages.getRepository(pack)}/tags"
       json: true
-      headers:
-        'User-Agent': "AtomApm/#{require('../package.json').version}"
 
     requestTags = ->
       request.get requestSettings, (error, response, tags=[]) ->
@@ -158,7 +156,7 @@ class Publish extends Command
           if error?
             callback(error)
           else if response.statusCode isnt 201
-            message = body.message ? body.error ? body
+            message = request.getErrorMessage(response, body)
             @logFailure()
             callback("Registering package in #{repository} repository failed: #{message}")
           else
@@ -189,7 +187,7 @@ class Publish extends Command
         if error?
           callback(error)
         else if response.statusCode isnt 201
-          message = body.message ? body.error ? body
+          message = request.getErrorMessage(response, body)
           callback("Creating new version failed: #{message}")
         else
           callback()
@@ -292,6 +290,31 @@ class Publish extends Command
     pack.name = name
     @saveMetadata(pack, callback)
 
+  validateSemverRanges: (pack) ->
+    return unless pack
+
+    isValidRange = (semverRange) ->
+      return true if semver.validRange(semverRange)
+
+      try
+        return true if url.parse(semverRange).protocol.length > 0
+
+      semverRange is 'latest'
+
+    if pack.engines?.atom?
+      unless semver.validRange(pack.engines.atom)
+        throw new Error("The Atom engine range in the package.json file is invalid: #{pack.engines.atom}")
+
+    for packageName, semverRange of pack.dependencies
+      unless isValidRange(semverRange)
+        throw new Error("The #{packageName} dependency range in the package.json file is invalid: #{semverRange}")
+
+    for packageName, semverRange of pack.devDependencies
+      unless isValidRange(semverRange)
+        throw new Error("The #{packageName} dev dependency range in the package.json file is invalid: #{semverRange}")
+
+    return
+
   # Run the publish command with the given options
   run: (options) ->
     {callback} = options
@@ -301,6 +324,11 @@ class Publish extends Command
 
     try
       pack = @loadMetadata()
+    catch error
+      return callback(error)
+
+    try
+      @validateSemverRanges(pack)
     catch error
       return callback(error)
 

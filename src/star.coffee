@@ -5,7 +5,7 @@ async = require 'async'
 CSON = require 'season'
 optimist = require 'optimist'
 
-config = require './config'
+config = require './apm'
 Command = require './command'
 fs = require './fs'
 Login = require './login'
@@ -46,7 +46,7 @@ class Star extends Command
         callback()
       else if response.statusCode isnt 200
         @logFailure()
-        message = body.message ? body.error ? body
+        message = request.getErrorMessage(response, body)
         callback("Starring package failed: #{message}")
       else
         @logSuccess()
@@ -78,7 +78,7 @@ class Star extends Command
     else
       packageNames = @packageNamesFromArgv(options.argv)
       if packageNames.length is 0
-        callback("Must specify a package name to star")
+        callback("Please specify a package name to star")
         return
 
     Login.getTokenOrLogin (error, token) =>

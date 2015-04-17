@@ -29,6 +29,7 @@ able to run it from a terminal.
 
 ## Building
   * Clone the repository
+  * :penguin: Install `libgnome-keyring-dev` if you are on Linux
   * Run `npm install`
   * Run `grunt` to compile the CoffeeScript code
   * Run `npm test` to run the specs
@@ -58,3 +59,7 @@ If you are using a proxy you can configure `apm` to use it by setting the
 ```
 https-proxy = https://9.0.2.1:0
 ```
+
+You can run `apm config get https-proxy` to verify it has been set correctly.
+
+You can also run `apm config list` to see all the custom config settings.

@@ -4,7 +4,7 @@ async = require 'async'
 _ = require 'underscore-plus'
 optimist = require 'optimist'
 
-config = require './config'
+config = require './apm'
 Command = require './command'
 fs = require './fs'
 
@@ -36,6 +36,7 @@ class Dedupe extends Command
     installNodeArgs.push("--target=#{config.getNodeVersion()}")
     installNodeArgs.push("--dist-url=#{config.getNodeUrl()}")
     installNodeArgs.push('--arch=ia32')
+    installNodeArgs.push('--ensure')
 
     env = _.extend({}, process.env, HOME: @atomNodeDirectory)
     env.USERPROFILE = env.HOME if config.isWin32()
@@ -96,8 +97,9 @@ class Dedupe extends Command
     fs.makeTreeSync(@atomNodeDirectory)
 
   run: (options) ->
-    {callback} = options
+    {callback, cwd} = options
     options = @parseOptions(options.commandArgs)
+    options.cwd = cwd
 
     @createAtomDirectories()
 

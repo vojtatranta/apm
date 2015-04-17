@@ -23,7 +23,7 @@ module.exports = (grunt) ->
 
     shell:
       test:
-        command: 'node --harmony_collections node_modules/jasmine-focused/bin/jasmine-focused --captureExceptions --coffee spec/'
+        command: 'node node_modules/jasmine-focused/bin/jasmine-focused --captureExceptions --coffee spec'
         options:
           stdout: true
           stderr: true
@@ -38,6 +38,6 @@ module.exports = (grunt) ->
     grunt.file.delete('bin/node_darwin_x64') if grunt.file.exists('bin/node_darwin_x64')
 
   grunt.registerTask('lint', ['coffeelint'])
-  grunt.registerTask('default', ['coffee', 'coffeelint:src'])
-  grunt.registerTask('test', ['clean', 'default', 'coffeelint:test', 'shell:test'])
+  grunt.registerTask('default', ['coffee', 'lint'])
+  grunt.registerTask('test', ['clean', 'default', 'shell:test'])
   grunt.registerTask('prepublish', ['clean', 'coffee', 'lint'])

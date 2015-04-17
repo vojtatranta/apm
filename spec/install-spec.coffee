@@ -1,4 +1,5 @@
 path = require 'path'
+CSON = require 'season'
 fs = require 'fs-plus'
 temp = require 'temp'
 express = require 'express'
@@ -7,7 +8,7 @@ wrench = require 'wrench'
 apm = require '../lib/apm-cli'
 
 describe 'apm install', ->
-  atomHome = null
+  [atomHome, resourcePath] = []
 
   beforeEach ->
     spyOnToken()
@@ -15,6 +16,12 @@ describe 'apm install', ->
 
     atomHome = temp.mkdirSync('apm-home-dir-')
     process.env.ATOM_HOME = atomHome
+
+    # Make sure the cache used is the one for the test env
+    delete process.env.npm_config_cache
+
+    resourcePath = temp.mkdirSync('atom-resource-path-')
+    process.env.ATOM_RESOURCE_PATH = resourcePath
 
   describe "when installing an atom package", ->
     server = null
@@ -27,6 +34,8 @@ describe 'apm install', ->
         response.sendfile path.join(__dirname, 'fixtures', 'node.lib')
       app.get '/node/v0.10.3/x64/node.lib', (request, response) ->
         response.sendfile path.join(__dirname, 'fixtures', 'node_x64.lib')
+      app.get '/node/v0.10.3/SHASUMS256.txt', (request, response) ->
+        response.sendfile path.join(__dirname, 'fixtures', 'SHASUMS256.txt')
       app.get '/tarball/test-module-1.0.0.tgz', (request, response) ->
         response.sendfile path.join(__dirname, 'fixtures', 'test-module-1.0.0.tgz')
       app.get '/tarball/test-module2-2.0.0.tgz', (request, response) ->
@@ -41,6 +50,8 @@ describe 'apm install', ->
         response.sendfile path.join(__dirname, 'fixtures', 'test-module-with-symlink-5.0.0.tgz')
       app.get '/tarball/test-module-with-bin-2.0.0.tgz', (request, response) ->
         response.sendfile path.join(__dirname, 'fixtures', 'test-module-with-bin-2.0.0.tgz')
+      app.get '/packages/multi-module', (request, response) ->
+        response.sendfile path.join(__dirname, 'fixtures', 'install-multi-version.json')
 
       server =  http.createServer(app)
       server.listen(3000)
@@ -85,6 +96,78 @@ describe 'apm install', ->
           expect(fs.existsSync(path.join(testModuleDirectory, 'index.js'))).toBeTruthy()
           expect(fs.existsSync(path.join(testModuleDirectory, 'package.json'))).toBeTruthy()
           expect(callback.mostRecentCall.args[0]).toBeNull()
+
+      describe "when the package is already in the cache", ->
+        it "installs it from the cache", ->
+          cachePath = path.join(require('../lib/apm').getCacheDirectory(), 'test-module2', '2.0.0', 'package.tgz')
+          testModuleDirectory = path.join(atomHome, 'packages', 'test-module2')
+
+          callback = jasmine.createSpy('callback')
+          apm.run(['install', "test-module2"], callback)
+          expect(fs.isFileSync(cachePath)).toBeFalsy()
+
+          waitsFor 'waiting for install to complete', 600000, ->
+            callback.callCount is 1
+
+          runs ->
+            expect(fs.existsSync(path.join(testModuleDirectory, 'package.json'))).toBeTruthy()
+            expect(callback.mostRecentCall.args[0]).toBeNull()
+            expect(fs.isFileSync(cachePath)).toBeTruthy()
+
+            callback.reset()
+            fs.removeSync(path.join(testModuleDirectory, 'package.json'))
+            apm.run(['install', "test-module2"], callback)
+
+          waitsFor 'waiting for install to complete', 600000, ->
+            callback.callCount is 1
+
+          runs ->
+            expect(fs.existsSync(path.join(testModuleDirectory, 'package.json'))).toBeTruthy()
+            expect(callback.mostRecentCall.args[0]).toBeNull()
+            expect(fs.isFileSync(cachePath)).toBeTruthy()
+
+      describe 'when multiple releases are available', ->
+        it 'installs the latest compatible version', ->
+          CSON.writeFileSync(path.join(resourcePath, 'package.json'), version: '1.5.0')
+          packageDirectory = path.join(atomHome, 'packages', 'test-module')
+
+          callback = jasmine.createSpy('callback')
+          apm.run(['install', 'multi-module'], callback)
+
+          waitsFor 'waiting for install to complete', 600000, ->
+            callback.callCount is 1
+
+          runs ->
+            expect(JSON.parse(fs.readFileSync(path.join(packageDirectory, 'package.json'))).version).toBe "1.0.0"
+            expect(callback.mostRecentCall.args[0]).toBeNull()
+
+        it "ignores the commit SHA suffix in the version", ->
+          CSON.writeFileSync(path.join(resourcePath, 'package.json'), version: '1.5.0-deadbeef')
+          packageDirectory = path.join(atomHome, 'packages', 'test-module')
+
+          callback = jasmine.createSpy('callback')
+          apm.run(['install', 'multi-module'], callback)
+
+          waitsFor 'waiting for install to complete', 600000, ->
+            callback.callCount is 1
+
+          runs ->
+            expect(JSON.parse(fs.readFileSync(path.join(packageDirectory, 'package.json'))).version).toBe "1.0.0"
+            expect(callback.mostRecentCall.args[0]).toBeNull()
+
+        it 'logs an error when no compatible versions are available', ->
+          CSON.writeFileSync(path.join(resourcePath, 'package.json'), version: '0.9.0')
+          packageDirectory = path.join(atomHome, 'packages', 'test-module')
+
+          callback = jasmine.createSpy('callback')
+          apm.run(['install', 'multi-module'], callback)
+
+          waitsFor 'waiting for install to complete', 600000, ->
+            callback.callCount is 1
+
+          runs ->
+            expect(fs.existsSync(packageDirectory)).toBeFalsy()
+            expect(callback.mostRecentCall.args[0]).not.toBeNull()
 
     describe 'when multiple package names are specified', ->
       it 'installs all packages', ->
@@ -200,3 +283,27 @@ describe 'apm install', ->
 
         runs ->
           expect(callback.mostRecentCall.args[0]).not.toBeNull()
+
+    describe 'when the package is bundled with Atom', ->
+      it 'logs a message to standard error', ->
+        CSON.writeFileSync(path.join(resourcePath, 'package.json'), packageDependencies: 'test-module': '1.0')
+
+        callback = jasmine.createSpy('callback')
+        apm.run(['install', 'test-module'], callback)
+
+        waitsFor 'waiting for install to complete', 600000, ->
+          callback.callCount is 1
+
+        runs ->
+          expect(console.error.mostRecentCall.args[0].length).toBeGreaterThan 0
+
+    describe 'when --check is specified', ->
+      it 'compiles a sample native module', ->
+        callback = jasmine.createSpy('callback')
+        apm.run(['install', '--check'], callback)
+
+        waitsFor 'waiting for install to complete', 600000, ->
+          callback.callCount is 1
+
+        runs ->
+          expect(callback.mostRecentCall.args[0]).toBeUndefined()

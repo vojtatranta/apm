@@ -4,9 +4,10 @@ path = require 'path'
 _ = require 'underscore-plus'
 optimist = require 'optimist'
 
-config = require './config'
+config = require './apm'
 Command = require './command'
 Install = require './install'
+git = require './git'
 Link = require './link'
 request = require './request'
 
@@ -50,14 +51,15 @@ class Develop extends Command
         else
           callback("No repository URL found for package: #{packageName}")
       else
-        message = body.message ? body.error ? body
+        message = request.getErrorMessage(response, body)
         callback("Request for package information failed: #{message}")
 
   cloneRepository: (repoUrl, packageDirectory, options) ->
     config.getSetting 'git', (command) =>
-      command ?= "git"
+      command ?= 'git'
       args = ['clone', '--recursive', repoUrl, packageDirectory]
       process.stdout.write "Cloning #{repoUrl} "
+      git.addGitToEnv(process.env)
       @spawn command, args, (code, stderr='', stdout='') =>
         if code is 0
           @logSuccess()

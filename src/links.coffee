@@ -3,7 +3,7 @@ path = require 'path'
 optimist = require 'optimist'
 
 Command = require './command'
-config = require './config'
+config = require './apm'
 fs = require './fs'
 tree = require './tree'
 
@@ -47,6 +47,9 @@ class Links extends Command
         realpath = '???'.red
       "#{path.basename(link).yellow} -> #{realpath}"
 
-  run: ->
+  run: (options) ->
+    {callback} = options
+
     @logLinks(@devPackagesPath)
     @logLinks(@packagesPath)
+    callback()

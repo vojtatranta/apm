@@ -33,8 +33,6 @@ class Command
     args.unshift(script)
     @spawn(process.execPath, args, remaining...)
 
-  showHelp: (argv) -> @parseOptions?(argv)?.showHelp()
-
   packageNamesFromArgv: (argv) ->
     @sanitizePackageNames(argv._)
 
@@ -61,3 +59,10 @@ class Command
     else
       @logFailure()
       callback("#{stdout}\n#{stderr}".trim())
+
+  normalizeVersion: (version) ->
+    if typeof version is 'string'
+      # Remove commit SHA suffix
+      version.replace(/-.*$/, '')
+    else
+      version

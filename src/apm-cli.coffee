@@ -7,8 +7,12 @@ npm = require 'npm'
 optimist = require 'optimist'
 wordwrap = require 'wordwrap'
 
-config = require './config'
+# Enable "require" scripts in asar archives
+require 'asar-require'
+
+config = require './apm'
 fs = require './fs'
+git = require './git'
 
 setupTempDirectory = ->
   temp = require 'temp'
@@ -18,11 +22,13 @@ setupTempDirectory = ->
   temp.dir = tempDirectory
   try
     fs.makeTreeSync(temp.dir)
+  temp.track()
 
 setupTempDirectory()
 
 commandClasses = [
   require './clean'
+  require './config'
   require './dedupe'
   require './develop'
   require './docs'
@@ -35,6 +41,7 @@ commandClasses = [
   require './login'
   require './publish'
   require './rebuild'
+  require './rebuild-module-cache'
   require './search'
   require './star'
   require './stars'
@@ -43,7 +50,6 @@ commandClasses = [
   require './unlink'
   require './unpublish'
   require './unstar'
-  require './update'
   require './upgrade'
   require './view'
 ]
@@ -75,13 +81,23 @@ parseOptions = (args=[]) ->
     break
   options
 
+showHelp = (options) ->
+  return unless options?
+
+  help = options.help()
+  if help.indexOf('Options:') >= 0
+    help += "\n  Prefix an option with `no-` to set it to false such as --no-color to disable"
+    help += "\n  colored output."
+
+  console.error(help)
+
 printVersions = (args, callback) ->
   apmVersion =  require('../package.json').version ? ''
   npmVersion = require('npm/package.json').version ? ''
   nodeVersion = process.versions.node ? ''
 
   getPythonVersion (pythonVersion) ->
-    getGitVersion (gitVersion) ->
+    git.getGitVersion (gitVersion) ->
       if args.json
         versions =
           apm: apmVersion
@@ -135,25 +151,9 @@ getPythonVersion = (callback) ->
         version = version?.trim()
       callback(version)
 
-getGitVersion = (callback) ->
-  npmOptions =
-    userconfig: config.getUserConfigPath()
-    globalconfig: config.getGlobalConfigPath()
-  npm.load npmOptions, ->
-    git = npm.config.get('git') ? 'git'
-    spawned = spawn(git, ['--version'])
-    outputChunks = []
-    spawned.stderr.on 'data', (chunk) -> outputChunks.push(chunk)
-    spawned.stdout.on 'data', (chunk) -> outputChunks.push(chunk)
-    spawned.on 'error', ->
-    spawned.on 'close', (code) ->
-      if code is 0
-        [gitName, versionName, version] = Buffer.concat(outputChunks).toString().split(' ')
-        version = version?.trim()
-      callback(version)
-
 module.exports =
   run: (args, callback) ->
+    config.setupApmRcFile()
     options = parseOptions(args)
 
     unless options.argv.color
@@ -189,18 +189,21 @@ module.exports =
       printVersions(args, options.callback)
     else if args.help
       if Command = commands[options.command]
-        new Command().showHelp(options.command)
+        showHelp(new Command().parseOptions?(options.command))
       else
-        options.showHelp()
+        showHelp(options)
+      options.callback()
     else if command
       if command is 'help'
         if Command = commands[options.commandArgs]
-          new Command().showHelp(options.commandArgs)
+          showHelp(new Command().parseOptions?(options.commandArgs))
         else
-          options.showHelp()
+          showHelp(options)
+        options.callback()
       else if Command = commands[command]
         new Command().run(options)
       else
         options.callback("Unrecognized command: #{command}")
     else
-      options.showHelp()
+      showHelp(options)
+      options.callback()

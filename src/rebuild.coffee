@@ -3,7 +3,7 @@ path = require 'path'
 _ = require 'underscore-plus'
 optimist = require 'optimist'
 
-config = require './config'
+config = require './apm'
 Command = require './command'
 Install = require './install'
 
@@ -19,25 +19,32 @@ class Rebuild extends Command
     options = optimist(argv)
     options.usage """
 
-      Usage: apm rebuild
+      Usage: apm rebuild [<name> [<name> ...]]
 
-      Rebuild all the modules currently installed in the node_modules folder
+      Rebuild the given modules currently installed in the node_modules folder
       in the current working directory.
+
+      All the modules will be rebuilt if no module names are specified.
     """
     options.alias('h', 'help').describe('help', 'Print this usage message')
 
-  showHelp: (argv) -> @parseOptions(argv).showHelp()
+  run: (options) ->
+    {callback} = options
+    options = @parseOptions(options.commandArgs)
 
-  run: ({callback}) ->
-    new Install().installNode (error) =>
-      if error?
-        callback(error)
-      else
+    config.loadNpm (error, npm) =>
+      install = new Install()
+      install.npm = npm
+      install.installNode (error) =>
+        return callback(error) if error?
+
         process.stdout.write 'Rebuilding modules '
 
-        rebuildArgs = ['rebuild']
+        rebuildArgs = ['--globalconfig', config.getGlobalConfigPath(), '--userconfig', config.getUserConfigPath(), 'rebuild']
         rebuildArgs.push("--target=#{config.getNodeVersion()}")
         rebuildArgs.push("--arch=#{config.getNodeArch()}")
+        rebuildArgs = rebuildArgs.concat(options.argv._)
+
         env = _.extend({}, process.env, HOME: @atomNodeDirectory)
         env.USERPROFILE = env.HOME if config.isWin32()
 

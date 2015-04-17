@@ -2,7 +2,7 @@ _ = require 'underscore-plus'
 optimist = require 'optimist'
 
 Command = require './command'
-config = require './config'
+config = require './apm'
 Install = require './install'
 Login = require './login'
 request = require './request'
@@ -54,7 +54,7 @@ class Stars extends Command
         packages = _.sortBy(packages, 'name')
         callback(null, packages)
       else
-        message = body.message ? body.error ? body
+        message = request.getErrorMessage(response, body)
         callback("Requesting packages failed: #{message}")
 
   installPackages: (packages, callback) ->

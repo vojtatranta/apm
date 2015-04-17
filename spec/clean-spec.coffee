@@ -6,7 +6,7 @@ http = require 'http'
 wrench = require 'wrench'
 apm = require '../lib/apm-cli'
 
-describe 'apm update', ->
+describe 'apm clean', ->
   [moduleDirectory, server] = []
 
   beforeEach ->
@@ -20,6 +20,8 @@ describe 'apm update', ->
       response.sendfile path.join(__dirname, 'fixtures', 'node.lib')
     app.get '/node/v0.10.3/x64/node.lib', (request, response) ->
       response.sendfile path.join(__dirname, 'fixtures', 'node_x64.lib')
+    app.get '/node/v0.10.3/SHASUMS256.txt', (request, response) ->
+      response.sendfile path.join(__dirname, 'fixtures', 'SHASUMS256.txt')
     app.get '/tarball/test-module-1.0.0.tgz', (request, response) ->
       response.sendfile path.join(__dirname, 'fixtures', 'test-module-1.0.0.tgz')
     server =  http.createServer(app)
@@ -37,17 +39,16 @@ describe 'apm update', ->
   afterEach ->
     server.close()
 
-  it 'uninstalls any packages not referenced in the package.json and installs any missing packages', ->
+  it 'uninstalls any packages not referenced in the package.json', ->
     removedPath = path.join(moduleDirectory, 'node_modules', 'will-be-removed')
     fs.makeTreeSync(removedPath)
 
     callback = jasmine.createSpy('callback')
-    apm.run(['update'], callback)
+    apm.run(['clean'], callback)
 
     waitsFor 'waiting for command to complete', ->
       callback.callCount > 0
 
     runs ->
+      expect(callback.mostRecentCall.args[0]).toBeUndefined()
       expect(fs.existsSync(removedPath)).toBeFalsy()
-      expect(fs.existsSync(path.join(moduleDirectory, 'node_modules', 'test-module', 'index.js'))).toBeTruthy()
-      expect(fs.existsSync(path.join(moduleDirectory, 'node_modules', 'test-module', 'package.json'))).toBeTruthy()

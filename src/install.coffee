@@ -4,11 +4,14 @@ async = require 'async'
 _ = require 'underscore-plus'
 optimist = require 'optimist'
 CSON = require 'season'
+semver = require 'npm/node_modules/semver'
 temp = require 'temp'
 
-config = require './config'
+config = require './apm'
 Command = require './command'
 fs = require './fs'
+git = require './git'
+RebuildModuleCache = require './rebuild-module-cache'
 request = require './request'
 
 module.exports =
@@ -40,39 +43,45 @@ class Install extends Command
       package names to install with optional versions using the
       `package-name@version` syntax.
     """
-    options.alias('c', 'compatible').string('compatible').describe('compatible', 'Only list packages/themes compatible with this Atom version')
+    options.alias('c', 'compatible').string('compatible').describe('compatible', 'Only install packages/themes compatible with this Atom version')
     options.alias('h', 'help').describe('help', 'Print this usage message')
     options.alias('s', 'silent').boolean('silent').describe('silent', 'Set the npm log level to silent')
     options.alias('q', 'quiet').boolean('quiet').describe('quiet', 'Set the npm log level to warn')
     options.boolean('check').describe('check', 'Check that native build tools are installed')
+    options.boolean('verbose').default('verbose', false).describe('verbose', 'Show verbose debug information')
     options.string('packages-file').describe('packages-file', 'A text file containing the packages to install')
+    options.boolean('production').describe('production', 'Do not install dev depedencies')
 
   installNode: (callback) =>
     installNodeArgs = ['install']
     installNodeArgs.push("--target=#{config.getNodeVersion()}")
     installNodeArgs.push("--dist-url=#{config.getNodeUrl()}")
     installNodeArgs.push("--arch=#{config.getNodeArch()}")
+    installNodeArgs.push("--ensure")
+    installNodeArgs.push("--verbose") if @verbose
 
     env = _.extend({}, process.env, HOME: @atomNodeDirectory)
 
     fs.makeTreeSync(@atomDirectory)
 
-    config.loadNpm (error, npm) =>
-      # node-gyp doesn't currently have an option for this so just set the
-      # environment variable to bypass strict SSL
-      # https://github.com/TooTallNate/node-gyp/issues/448
-      useStrictSsl = npm.config.get('strict-ssl') ? true
-      env.NODE_TLS_REJECT_UNAUTHORIZED = 0 unless useStrictSsl
+    # node-gyp doesn't currently have an option for this so just set the
+    # environment variable to bypass strict SSL
+    # https://github.com/TooTallNate/node-gyp/issues/448
+    useStrictSsl = @npm.config.get('strict-ssl') ? true
+    env.NODE_TLS_REJECT_UNAUTHORIZED = 0 unless useStrictSsl
 
-      # Pass through configured proxy to node-gyp
-      proxy = npm.config.get('https-proxy') or npm.config.get('proxy')
-      installNodeArgs.push("--proxy=#{proxy}") if proxy
+    # Pass through configured proxy to node-gyp
+    proxy = @npm.config.get('https-proxy') or @npm.config.get('proxy')
+    installNodeArgs.push("--proxy=#{proxy}") if proxy
 
-      @fork @atomNodeGypPath, installNodeArgs, {env, cwd: @atomDirectory}, (code, stderr='', stdout='') ->
-        if code is 0
-          callback()
-        else
-          callback("#{stdout}\n#{stderr}")
+    opts = {env, cwd: @atomDirectory}
+    opts.streaming = true if @verbose
+
+    @fork @atomNodeGypPath, installNodeArgs, opts, (code, stderr='', stdout='') ->
+      if code is 0
+        callback()
+      else
+        callback("#{stdout}\n#{stderr}")
 
   updateWindowsEnv: (env) ->
     # Make sure node-gyp is always on the PATH
@@ -82,6 +91,8 @@ class Install extends Command
     else
       env.Path = localModuleBins
 
+    git.addGitToEnv(env)
+
   addNodeBinToEnv: (env) ->
     nodeBinFolder = path.resolve(__dirname, '..', 'bin')
     pathKey = if config.isWin32() then 'Path' else 'PATH'
@@ -90,6 +101,17 @@ class Install extends Command
     else
       env[pathKey]= nodeBinFolder
 
+  addProxyToEnv: (env) ->
+    httpProxy = @npm.config.get('proxy')
+    if httpProxy
+      env.HTTP_PROXY ?= httpProxy
+      env.http_proxy ?= httpProxy
+
+    httpsProxy = @npm.config.get('https-proxy')
+    if httpsProxy
+      env.HTTPS_PROXY ?= httpsProxy
+      env.https_proxy ?= httpsProxy
+
   installModule: (options, pack, modulePath, callback) ->
     installArgs = ['--globalconfig', config.getGlobalConfigPath(), '--userconfig', config.getUserConfigPath(), 'install']
     installArgs.push(modulePath)
@@ -97,6 +119,7 @@ class Install extends Command
     installArgs.push("--arch=#{config.getNodeArch()}")
     installArgs.push('--silent') if options.argv.silent
     installArgs.push('--quiet') if options.argv.quiet
+    installArgs.push('--production') if options.argv.production
 
     if vsArgs = @getVisualStudioFlags()
       installArgs.push(vsArgs)
@@ -104,7 +127,9 @@ class Install extends Command
     env = _.extend({}, process.env, HOME: @atomNodeDirectory)
     @updateWindowsEnv(env) if config.isWin32()
     @addNodeBinToEnv(env)
+    @addProxyToEnv(env)
     installOptions = {env}
+    installOptions.streaming = true if @verbose
 
     installGlobally = options.installGlobally ? true
     if installGlobally
@@ -122,6 +147,10 @@ class Install extends Command
             destination = path.join(@atomPackagesDirectory, child)
             do (source, destination) ->
               commands.push (callback) -> fs.cp(source, destination, callback)
+
+          commands.push (callback) => @buildModuleCache(pack.name, callback)
+          commands.push (callback) => @warmCompileCache(pack.name, callback)
+
           async.waterfall commands, (error) =>
             if error?
               @logFailure()
@@ -135,7 +164,40 @@ class Install extends Command
           fs.removeSync(installDirectory)
           @logFailure()
 
-        callback("#{stdout}\n#{stderr}")
+        error = "#{stdout}\n#{stderr}"
+        error = @getGitErrorMessage(pack) if error.indexOf('code ENOGIT') isnt -1
+        callback(error)
+
+  getGitErrorMessage: (pack) ->
+    message = """
+      Failed to install #{pack.name} because Git was not found.
+
+      The #{pack.name} package has module dependencies that cannot be installed without Git.
+
+      You need to install Git and add it to your path environment variable in order to install this package.
+
+    """
+
+    switch process.platform
+      when 'win32'
+        message += """
+
+          You can install Git by downloading, installing, and launching GitHub for Windows: https://windows.github.com
+
+        """
+      when 'linux'
+        message += """
+
+          You can install Git from your OS package manager.
+
+        """
+
+    message += """
+
+      Run apm -v after installing Git to see what version has been detected.
+    """
+
+    message
 
   getVisualStudioFlags: ->
     if vsVersion = config.getInstalledVisualStudioFlag()
@@ -153,6 +215,7 @@ class Install extends Command
     installArgs.push("--arch=#{config.getNodeArch()}")
     installArgs.push('--silent') if options.argv.silent
     installArgs.push('--quiet') if options.argv.quiet
+    installArgs.push('--production') if options.argv.production
 
     if vsArgs = @getVisualStudioFlags()
       installArgs.push(vsArgs)
@@ -160,8 +223,10 @@ class Install extends Command
     env = _.extend({}, process.env, HOME: @atomNodeDirectory)
     @updateWindowsEnv(env) if config.isWin32()
     @addNodeBinToEnv(env)
+    @addProxyToEnv(env)
     installOptions = {env}
     installOptions.cwd = options.cwd if options.cwd
+    installOptions.streaming = true if @verbose
 
     @fork(@atomNpmPath, installArgs, installOptions, callback)
 
@@ -174,14 +239,17 @@ class Install extends Command
     requestSettings =
       url: "#{config.getAtomPackagesUrl()}/#{packageName}"
       json: true
+      retries: 4
     request.get requestSettings, (error, response, body={}) ->
       if error?
-        callback("Request for package information failed: #{error.message}")
+        message = "Request for package information failed: #{error.message}"
+        message += " (#{error.code})" if error.code
+        callback(message)
       else if response.statusCode isnt 200
-        message = body.message ? body.error ? body
+        message = request.getErrorMessage(response, body)
         callback("Request for package information failed: #{message}")
       else
-        if latestVersion = body.releases.latest
+        if body.releases.latest
           callback(null, body)
         else
           callback("No releases available for #{packageName}")
@@ -203,7 +271,7 @@ class Install extends Command
           filePath = path.join(temp.mkdirSync(), 'package.tgz')
           writeStream = fs.createWriteStream(filePath)
           readStream.pipe(writeStream)
-          writeStream.on 'error', (errror) ->
+          writeStream.on 'error', (error) ->
             callback("Unable to download #{packageUrl}: #{error.message}")
           writeStream.on 'close', -> callback(null, filePath)
         else
@@ -223,12 +291,22 @@ class Install extends Command
   #
   #  packageName - The string name of the package.
   #  packageVersion - The string version of the package.
+  #  callback - The function to call with error and cachePath arguments.
   #
   # Returns a path to the cached tarball or undefined when not in the cache.
-  getPackageCachePath: (packageName, packageVersion) ->
-    cacheDir = config.getPackageCacheDirectory()
+  getPackageCachePath: (packageName, packageVersion, callback) ->
+    cacheDir = config.getCacheDirectory()
     cachePath = path.join(cacheDir, packageName, packageVersion, 'package.tgz')
-    return cachePath if fs.isFileSync(cachePath)
+    if fs.isFileSync(cachePath)
+      tempPath = path.join(temp.mkdirSync(), path.basename(cachePath))
+      fs.cp cachePath, tempPath, (error) ->
+        if error?
+          callback(error)
+        else
+          callback(null, tempPath)
+    else
+      process.nextTick ->
+        callback(new Error("#{packageName}@#{packageVersion} is not in the cache"))
 
   # Is the package at the specified version already installed?
   #
@@ -275,19 +353,24 @@ class Install extends Command
         @logFailure()
         callback(error)
       else
-        commands = []
-        packageVersion ?= pack.releases.latest
+        packageVersion ?= @getLatestCompatibleVersion(pack)
+        unless packageVersion
+          @logFailure()
+          callback("No available version compatible with the installed Atom version: #{@installedAtomVersion}")
+
         {tarball} = pack.versions[packageVersion]?.dist ? {}
         unless tarball
           @logFailure()
           callback("Package version: #{packageVersion} not found")
           return
 
+        commands = []
         commands.push (callback) =>
-          if packagePath = @getPackageCachePath(packageName, packageVersion)
-            callback(null, packagePath)
-          else
-            @downloadPackage(tarball, installGlobally, callback)
+          @getPackageCachePath packageName, packageVersion, (error, packagePath) =>
+            if packagePath
+              callback(null, packagePath)
+            else
+              @downloadPackage(tarball, installGlobally, callback)
         installNode = options.installNode ? true
         if installNode
           commands.push (packagePath, callback) =>
@@ -362,7 +445,9 @@ class Install extends Command
       env = _.extend({}, process.env, HOME: @atomNodeDirectory)
       @updateWindowsEnv(env) if config.isWin32()
       @addNodeBinToEnv(env)
+      @addProxyToEnv(env)
       buildOptions = {env}
+      buildOptions.streaming = true if @verbose
 
       fs.removeSync(path.resolve(__dirname, '..', 'native-module', 'build'))
 
@@ -378,6 +463,70 @@ class Install extends Command
     packages = fs.readFileSync(filePath, 'utf8')
     @sanitizePackageNames(packages.split(/\s/))
 
+  getResourcePath: (callback) ->
+    if @resourcePath
+      process.nextTick => callback(@resourcePath)
+    else
+      config.getResourcePath (@resourcePath) => callback(@resourcePath)
+
+  buildModuleCache: (packageName, callback) ->
+    packageDirectory = path.join(@atomPackagesDirectory, packageName)
+    rebuildCacheCommand = new RebuildModuleCache()
+    rebuildCacheCommand.rebuild packageDirectory, ->
+      # Ignore cache errors and just finish the install
+      callback()
+
+  warmCompileCache: (packageName, callback) ->
+    packageDirectory = path.join(@atomPackagesDirectory, packageName)
+
+    @getResourcePath (resourcePath) =>
+      try
+        CompileCache = require(path.join(resourcePath, 'src', 'compile-cache'))
+
+        onDirectory = (directoryPath) ->
+          path.basename(directoryPath) isnt 'node_modules'
+
+        onFile = (filePath) =>
+          try
+            CompileCache.addPathToCache(filePath, @atomDirectory)
+
+        fs.traverseTreeSync(packageDirectory, onFile, onDirectory)
+      callback(null)
+
+  isBundledPackage: (packageName, callback) ->
+    @getResourcePath (resourcePath) ->
+      try
+        atomMetadata = JSON.parse(fs.readFileSync(path.join(resourcePath, 'package.json')))
+      catch error
+        return callback(false)
+
+      callback(atomMetadata?.packageDependencies?.hasOwnProperty(packageName))
+
+  getLatestCompatibleVersion: (pack) ->
+    return pack.releases.latest unless @installedAtomVersion
+
+    latestVersion = null
+    for version, metadata of pack.versions ? {}
+      continue unless semver.valid(version)
+      continue unless metadata
+
+      engine = metadata.engines?.atom ? '*'
+      continue unless semver.validRange(engine)
+      continue unless semver.satisfies(@installedAtomVersion, engine)
+
+      latestVersion ?= version
+      latestVersion = version if semver.gt(version, latestVersion)
+
+    latestVersion
+
+  loadInstalledAtomVersion: (callback) ->
+    @getResourcePath (resourcePath) =>
+      try
+        {version} = require(path.join(resourcePath, 'package.json')) ? {}
+        version = @normalizeVersion(version)
+        @installedAtomVersion = version if semver.valid(version)
+      callback()
+
   run: (options) ->
     {callback} = options
     options = @parseOptions(options.commandArgs)
@@ -385,7 +534,14 @@ class Install extends Command
 
     @createAtomDirectories()
 
-    return @checkNativeBuildTools(callback) if options.argv.check
+    if options.argv.check
+      config.loadNpm (error, @npm) => @checkNativeBuildTools(callback)
+      return
+
+    @verbose = options.argv.verbose
+    if @verbose
+      request.debug(true)
+      process.env.NODE_DEBUG = 'request'
 
     installPackage = (name, callback) =>
       if name is '.'
@@ -395,9 +551,16 @@ class Install extends Command
         if atIndex > 0
           version = name.substring(atIndex + 1)
           name = name.substring(0, atIndex)
-        @installPackage({name, version}, options, callback)
 
-    commands = []
+        @isBundledPackage name, (isBundledPackage) =>
+          if isBundledPackage
+            console.error """
+              The #{name} package is bundled with Atom and should not be explicitly installed.
+              You can run `apm uninstall #{name}` to uninstall it and then the version bundled
+              with Atom will be used.
+            """.yellow
+          @installPackage({name, version}, options, callback)
+
     if packagesFilePath
       try
         packageNames = @packageNamesFromPath(packagesFilePath)
@@ -406,6 +569,10 @@ class Install extends Command
     else
       packageNames = @packageNamesFromArgv(options.argv)
       packageNames.push('.') if packageNames.length is 0
+
+    commands = []
+    commands.push (callback) => config.loadNpm (error, @npm) => callback()
+    commands.push (callback) => @loadInstalledAtomVersion(callback)
     packageNames.forEach (packageName) ->
       commands.push (callback) -> installPackage(packageName, callback)
     async.waterfall(commands, callback)
