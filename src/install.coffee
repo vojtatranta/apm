@@ -343,9 +343,9 @@ class Install extends Command
     if installGlobally
       process.stdout.write "to #{@atomPackagesDirectory} "
 
-    if packageVersion.indexOf('git+') != -1
-      console.log(packageVersion)
-      @installModule(options, null, packageVersion, callback)
+    if packageVersion.indexOf('git+') != -1 or packageName.indexOf('@') is 0
+      console.log('')
+      @installModule(options, null, "#{packageName}@#{packageVersion}", callback)
       return
 
     @requestPackage packageName, (error, pack) =>
