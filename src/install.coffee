@@ -120,6 +120,7 @@ class Install extends Command
     installArgs.push('--silent') if options.argv.silent
     installArgs.push('--quiet') if options.argv.quiet
     installArgs.push('--production') if options.argv.production
+    installArgs.push('--ignore-scripts') if options.argv['ignore-scripts']
 
     if vsArgs = @getVisualStudioFlags()
       installArgs.push(vsArgs)
@@ -216,6 +217,7 @@ class Install extends Command
     installArgs.push('--silent') if options.argv.silent
     installArgs.push('--quiet') if options.argv.quiet
     installArgs.push('--production') if options.argv.production
+    installArgs.push('--ignore-scripts') if options.argv['ignore-scripts']
 
     if vsArgs = @getVisualStudioFlags()
       installArgs.push(vsArgs)
